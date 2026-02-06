@@ -1,6 +1,5 @@
 Flask
 matplotlib
-spacy
 PyMuPDF
 nltk
 requests

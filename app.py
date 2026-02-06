@@ -1,4 +1,6 @@
 import os
+import io
+import base64
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 from flask_bcrypt import Bcrypt
 from pymongo import MongoClient
@@ -30,11 +32,11 @@ mongo_client = MongoClient(MONGO_URI) if MONGO_URI else MongoClient()
 db = mongo_client[MONGO_DB_NAME]
 bcrypt = Bcrypt(app)
 
-# Global lists to store details
-resume_details = []
-similarity_scores = []
-pie_chart_images = []
-non_matching_skills_list = []
+# Global lists to store details (Deprecated: Using MongoDB for persistence)
+# resume_details = []
+# similarity_scores = []
+# pie_chart_images = []
+# non_matching_skills_list = []
 
 # Admin credentials (hashed for better security)
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
@@ -47,52 +49,72 @@ def scrape_jobs(job_title, job_location):
         job_title = ""
     if not job_location:
         job_location = ""
+    
+    # Mock data for fallback (Vercel/Serverless environments)
+    mock_jobs = [
+        {"title": "Software Engineer (Demo)", "company": "Tech Corp", "location": "Remote", "link": "#"},
+        {"title": "Data Scientist (Demo)", "company": "Data Inc", "location": "New York, NY", "link": "#"},
+        {"title": "Product Manager (Demo)", "company": "Biz Solutions", "location": "San Francisco, CA", "link": "#"},
+        {"title": "DevOps Engineer (Demo)", "company": "Cloud Systems", "location": "Austin, TX", "link": "#"},
+        {"title": "Full Stack Developer (Demo)", "company": "Web Agency", "location": "London, UK", "link": "#"}
+    ]
 
-    job_title = job_title.replace(" ", "%20")  # URL encode spaces
-    job_location = job_location.replace(" ", "%20")  # URL encode spaces
-    url = f"https://www.linkedin.com/jobs/search?keywords={job_title}&location={job_location}"
-
-    options = Options()
-    options.add_argument("--headless")  # Run in headless mode
-    options.add_argument("--disable-gpu")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=options)
-    driver.get(url)
-
-    jobs = []
     try:
-        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CLASS_NAME, 'base-card')))
-        job_cards = driver.find_elements(By.CLASS_NAME, 'base-card')[:10]
+        job_title = job_title.replace(" ", "%20")  # URL encode spaces
+        job_location = job_location.replace(" ", "%20")  # URL encode spaces
+        url = f"https://www.linkedin.com/jobs/search?keywords={job_title}&location={job_location}"
 
-        for card in job_cards:
-            try:
-                title_element = card.find_element(By.CLASS_NAME, "base-search-card__title")
-                company_element = card.find_element(By.CLASS_NAME, "base-search-card__subtitle")
-                location_element = card.find_element(By.CLASS_NAME, "job-search-card__location")
-                link_element = card.find_element(By.TAG_NAME, "a")
+        options = Options()
+        options.add_argument("--headless")  # Run in headless mode
+        options.add_argument("--disable-gpu")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
 
-                title = title_element.text.strip() if title_element else "N/A"
-                company = company_element.text.strip() if company_element else "N/A"
-                location = location_element.text.strip() if location_element else "N/A"
-                link = link_element.get_attribute("href") if link_element else "#"
+        # Attempt to install/run Chrome
+        try:
+            service = Service(ChromeDriverManager().install())
+            driver = webdriver.Chrome(service=service, options=options)
+        except Exception as e:
+            print(f"Chrome Driver initialization failed (expected on Vercel): {e}")
+            return mock_jobs
 
-                if title != "N/A" and company != "N/A":  # Avoid empty job entries
-                    jobs.append({"title": title, "company": company, "location": location, "link": link})
-                else:
-                    print("Skipping incomplete job listing.")
+        driver.get(url)
 
-            except Exception as e:
-                print(f"Error extracting job data: {e}")
+        jobs = []
+        try:
+            WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CLASS_NAME, 'base-card')))
+            job_cards = driver.find_elements(By.CLASS_NAME, 'base-card')[:10]
 
+            for card in job_cards:
+                try:
+                    title_element = card.find_element(By.CLASS_NAME, "base-search-card__title")
+                    company_element = card.find_element(By.CLASS_NAME, "base-search-card__subtitle")
+                    location_element = card.find_element(By.CLASS_NAME, "job-search-card__location")
+                    link_element = card.find_element(By.TAG_NAME, "a")
+
+                    title = title_element.text.strip() if title_element else "N/A"
+                    company = company_element.text.strip() if company_element else "N/A"
+                    location = location_element.text.strip() if location_element else "N/A"
+                    link = link_element.get_attribute("href") if link_element else "#"
+
+                    if title != "N/A" and company != "N/A":  # Avoid empty job entries
+                        jobs.append({"title": title, "company": company, "location": location, "link": link})
+                    else:
+                        print("Skipping incomplete job listing.")
+
+                except Exception as e:
+                    print(f"Error extracting job data: {e}")
+
+        except Exception as e:
+            print(f"Error fetching job listings: {e}")
+            jobs = mock_jobs
+
+        driver.quit()
+        return jobs
     except Exception as e:
-        print(f"Error fetching job listings: {e}")
-
-    driver.quit()
-    return jobs
+        print(f"Critical error in scrape_jobs: {e}")
+        return mock_jobs
 @app.route("/filter", methods=["GET", "POST"])
 def home():
     jobs = []
@@ -194,8 +216,6 @@ def index():
     if 'loggedin' not in session:
         return redirect(url_for('introduction'))  # Redirect to introduction if not logged in
 
-    global resume_details, similarity_scores, pie_chart_images, non_matching_skills_list
-
     selected_job_urls = []  # Store selected job URLs
 
     if request.method == 'POST':
@@ -217,11 +237,11 @@ def index():
         elif 'upload_resumes' in request.form:  # When the user uploads resumes
             resumes = request.files.getlist('resumes')
 
-            # Clear previous results
-            resume_details.clear()
-            similarity_scores.clear()
-            pie_chart_images.clear()
-            non_matching_skills_list.clear()
+            # Local lists to hold results
+            resume_details = []
+            similarity_scores = []
+            pie_chart_images = []
+            non_matching_skills_list = []
 
             if "selected_job_urls" in session:
                 selected_job_urls = session["selected_job_urls"]
@@ -247,16 +267,16 @@ def index():
                     ats_score = calculate_ats_score(precision, recall, f1)
 
                     similarity_scores.append({
-        'skills_score': skills_score,
-        'education_score': education_score,
-        'beart_score': beart_score,  # Add BEART score
-        'sbert_score': sbert_score,
-        'overall_score': overall_score,
-        'precision': precision,
-        'recall': recall,
-        'f1': f1,
-        'ATS Score': ats_score
-    })
+                        'skills_score': skills_score,
+                        'education_score': education_score,
+                        'beart_score': beart_score,  # Add BEART score
+                        'sbert_score': sbert_score,
+                        'overall_score': overall_score,
+                        'precision': precision,
+                        'recall': recall,
+                        'f1': f1,
+                        'ATS Score': ats_score
+                    })
 
                     # Find non-matching skills
                     non_matching_skills = find_non_matching_skills(details['skills'], job_description)
@@ -271,13 +291,27 @@ def index():
                     plt.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=140)
                     plt.axis('equal')
 
-                    # Save the pie chart
-                    chart_filename = f'similarity_pie_chart_{idx}.png'
-                    chart_path = os.path.join('static', chart_filename)
-                    plt.savefig(chart_path)
+                    # Save the pie chart as Base64 string for Vercel compatibility
+                    img = io.BytesIO()
+                    plt.savefig(img, format='png')
+                    img.seek(0)
+                    plot_url = base64.b64encode(img.getvalue()).decode()
+                    pie_chart_images.append(f"data:image/png;base64,{plot_url}")
                     plt.close()
 
-                    pie_chart_images.append(chart_filename)
+            # Save results to MongoDB linked to the user
+            user_id = session.get('user_id')
+            if user_id:
+                db.parsing_results.update_one(
+                    {'user_id': user_id},
+                    {'$set': {
+                        'resume_details': resume_details,
+                        'similarity_scores': similarity_scores,
+                        'pie_chart_images': pie_chart_images,
+                        'non_matching_skills_list': non_matching_skills_list
+                    }},
+                    upsert=True
+                )
 
             return redirect(url_for('candidate_details'))
 
@@ -285,10 +319,13 @@ def index():
 
 @app.route('/candidate_details')
 def candidate_details():
-    if not resume_details:
+    user_id = session.get('user_id')
+    result = db.parsing_results.find_one({'user_id': user_id}) if user_id else None
+
+    if not result or not result.get('resume_details'):
         return redirect(url_for('index'))
 
-    return render_template('candidate_details.html', resume_details=resume_details, non_matching_skills=non_matching_skills_list)
+    return render_template('candidate_details.html', resume_details=result['resume_details'], non_matching_skills=result['non_matching_skills_list'])
 
 @app.route('/dashboard')
 def dashboard():
@@ -303,22 +340,33 @@ def dashboard():
 
 @app.route('/similarity_score')
 def similarity_score():
-    if not resume_details or not similarity_scores:
+    user_id = session.get('user_id')
+    result = db.parsing_results.find_one({'user_id': user_id}) if user_id else None
+
+    if not result or not result.get('resume_details') or not result.get('similarity_scores'):
         return redirect(url_for('index'))
 
-    return render_template('similarity_score.html', resume_details=resume_details, similarity_scores=similarity_scores)
+    return render_template('similarity_score.html', resume_details=result['resume_details'], similarity_scores=result['similarity_scores'])
 
 @app.route('/visualization_graph')
 def visualization_graph():
-    if not pie_chart_images:
+    user_id = session.get('user_id')
+    result = db.parsing_results.find_one({'user_id': user_id}) if user_id else None
+
+    if not result or not result.get('pie_chart_images'):
         return redirect(url_for('index'))
 
-    return render_template('visualization_graph.html', pie_chart_images=pie_chart_images)
+    return render_template('visualization_graph.html', pie_chart_images=result['pie_chart_images'])
 
 @app.route('/similarity_bar_chart')
 def similarity_bar_chart():
-    if not similarity_scores:
+    user_id = session.get('user_id')
+    result = db.parsing_results.find_one({'user_id': user_id}) if user_id else None
+    
+    if not result or not result.get('similarity_scores'):
         return redirect(url_for('index'))
+    
+    similarity_scores = result['similarity_scores']
 
     candidates = [f'Candidate {i+1}' for i in range(len(similarity_scores))]
     skills_scores = [score['skills_score'] for score in similarity_scores]
@@ -339,12 +387,16 @@ def similarity_bar_chart():
     plt.xticks([i + bar_width for i in index], candidates)
 
     plt.legend()
-    bar_chart_filename = 'similarity_bar_chart.png'
-    bar_chart_path = os.path.join('static', bar_chart_filename)
-    plt.savefig(bar_chart_path)
+    
+    # Base64 encoding for Vercel
+    img = io.BytesIO()
+    plt.savefig(img, format='png')
+    img.seek(0)
+    bar_chart_filename = base64.b64encode(img.getvalue()).decode()
+    bar_chart_data = f"data:image/png;base64,{bar_chart_filename}"
     plt.close()
 
-    return render_template('similarity_bar_chart.html', bar_chart_image=bar_chart_filename)
+    return render_template('similarity_bar_chart.html', bar_chart_image=bar_chart_data)
 
 if __name__ == '__main__':
     app.run(debug=True)

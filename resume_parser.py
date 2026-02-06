@@ -7,12 +7,22 @@ from bs4 import BeautifulSoup
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from nltk.corpus import stopwords
-from sentence_transformers import SentenceTransformer, util
 import numpy as np
 
+try:
+    from sentence_transformers import SentenceTransformer, util
+    SBERT_AVAILABLE = True
+except ImportError:
+    SBERT_AVAILABLE = False
+    print("Warning: sentence-transformers not found. SBERT similarity will be disabled.")
+
 # Download required NLTK data
-nltk.download('punkt')
-nltk.download('stopwords')
+nltk.data.path.append("/tmp")
+try:
+    nltk.download('punkt', download_dir='/tmp')
+    nltk.download('stopwords', download_dir='/tmp')
+except Exception as e:
+    print(f"Warning: NLTK download failed (might be already present or network issue): {e}")
 
 # Stopwords for filtering
 STOP_WORDS = set(stopwords.words('english'))
@@ -192,6 +202,9 @@ def calculate_similarity(resume_details, job_description):
 
 def calculate_sbert_similarity(resume_text, job_description):
     """Calculate semantic similarity using SBERT embeddings"""
+    if not SBERT_AVAILABLE or SBERT_MODEL is None:
+        return 0.0
+
     try:
         # Encode both texts
         resume_embedding = SBERT_MODEL.encode(resume_text, convert_to_tensor=True)
@@ -253,23 +266,12 @@ def calculate_beart_similarity(resume_skills, job_description):
     return round(beart_score, 2)  # Convert to percentage
 
 
-# Load SBERT model (add at top of file)
-SBERT_MODEL = SentenceTransformer('all-MiniLM-L6-v2')  # Lightweight model good for this use case
-
-def calculate_sbert_similarity(resume_text, job_description):
-    """
-    Calculate semantic similarity using SBERT embeddings
-    """
+# Initialize SBERT Model if available
+SBERT_MODEL = None
+if SBERT_AVAILABLE:
     try:
-        # Encode both texts
-        resume_embedding = SBERT_MODEL.encode(resume_text, convert_to_tensor=True)
-        jd_embedding = SBERT_MODEL.encode(job_description, convert_to_tensor=True)
-        
-        # Calculate cosine similarity
-        similarity = util.pytorch_cos_sim(resume_embedding, jd_embedding)
-        
-        # Convert to percentage
-        return round(similarity.item() , 2)
+        # Using a smaller model or handling download issues
+        SBERT_MODEL = SentenceTransformer('all-MiniLM-L6-v2')
     except Exception as e:
-        print(f"Error calculating SBERT similarity: {e}")
-        return 0.0
+        print(f"Warning: Failed to load SBERT model: {e}")
+        SBERT_MODEL = None
