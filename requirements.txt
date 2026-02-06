@@ -9,6 +9,4 @@ flask-bcrypt
 pymongo
 python-dotenv
 python-docx
-sentence-transformers
-selenium
-webdriver-manager
+

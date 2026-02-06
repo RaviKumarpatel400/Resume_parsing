@@ -9,13 +9,20 @@ from dotenv import load_dotenv
 import matplotlib
 import matplotlib.pyplot as plt
 from resume_parser import parse_resume, get_job_description, calculate_similarity, find_non_matching_skills, calculate_ats_score
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
+
+# Optional Selenium imports for Vercel compatibility
+try:
+    from selenium import webdriver
+    from selenium.webdriver.chrome.service import Service
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from webdriver_manager.chrome import ChromeDriverManager
+    SELENIUM_AVAILABLE = True
+except ImportError:
+    SELENIUM_AVAILABLE = False
+    print("Warning: Selenium/Webdriver not found. Scraping will be mocked.")
 
 # Use Agg backend for Matplotlib
 matplotlib.use('Agg')
@@ -58,6 +65,9 @@ def scrape_jobs(job_title, job_location):
         {"title": "DevOps Engineer (Demo)", "company": "Cloud Systems", "location": "Austin, TX", "link": "#"},
         {"title": "Full Stack Developer (Demo)", "company": "Web Agency", "location": "London, UK", "link": "#"}
     ]
+
+    if not SELENIUM_AVAILABLE:
+        return mock_jobs
 
     try:
         job_title = job_title.replace(" ", "%20")  # URL encode spaces
